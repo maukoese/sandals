@@ -1,0 +1,24 @@
+{
+    "name": "maukoese/sandals",
+    "type": "library",
+    "description": "Simple And Nifty Data Abstraction Layers",
+    "keywords": ["data","database", "abstraction"],
+    "homepage": "https://github.com/maukoese/sandals",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Mauko Maunde",
+            "email": "hi@mauko.co.ke",
+            "homepage": "https://mauko.co.ke",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": ">=7.0"
+    },
+    "autoload": {
+        "psr-0": {
+            "sandals": "src"
+        }
+    }
+}
