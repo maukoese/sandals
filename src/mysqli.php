@@ -1,9 +1,9 @@
 <?php
-namespace PatiPati;
+namespace PatiPati\MySQL;
 
 /**
  * @package SANDALs - Simple And Nifty Data Abstraction Layers
- * @subpackage MySQLI Data Access Layer
+ * @subpackage MySQLi Data Access Layer
  * @version 18.01
  * @author Mauko < hi@mauko.co.ke >
  * @link https://phpsandals.co.ke/dals/mysqli
@@ -13,39 +13,69 @@ class SANDAL
 	// Database tables prefix, if any
 	private $prefix;
 
+	// Temporary database connection object
+	private $tconn;
+
 	// Database connection object
 	private $conn;
 
+	// Database table name
+	private $table;
+
+	// Array of database table collumn names
+	public $collumns;
+
+	// Array of blacklisted database collumns
+	public $blacklist;
+
 	/**
-	 * Constuctor method
-	 * @param array $config Server/Database configurations
-	 * @param string $table Name of database table, without prefix
-	 * @param array $collumns List of database collumns associated with data object
-	 * @param array $whitelist List of whitelisted collumns - allows hiding of sensitive fields such as password
+	 * Constuctor method sets basic server connection parameters, as well as database table name prefixes
+	 * As an added bonus, we can create a database if it does not exist.
 	 */
-	public function __construct()
+	public function __construct( $table, $blacklist = null )
 	{
 		if ( !defined( 'appconfig' ) ){
 			die( 'Please define appconfig( Server Variables )');
 		}
 
-		$this -> prefix = isset( appconfig['dbprefix'] ) ? appconfig['dbprefix'] : '';
-
 		$dbname = appconfig['dbname'];
-		$dbuser = isset( appconfig['dbuser'] ) ? appconfig['dbuser'] : 'root'; 
-		$dbpassword = isset( appconfig['dbpassword'] ) ? appconfig['dbpassword'] : '';
-		$dbhost = isset( appconfig['dbhost'] ) ? appconfig['dbhost'] : 'localhost';
-		$dbport = isset( appconfig['dbport'] ) ? appconfig['dbport'] : $_SERVER['SERVER_PORT'];
+		$dbuser = appconfig['dbuser'] ?? 'root'; 
+		$dbpassword = appconfig['dbpassword'] ?? '';
+		$dbhost = appconfig['dbhost'] ?? 'localhost';
+		$dbport = appconfig['dbport'] ?? $_SERVER['SERVER_PORT'];
+
+		$this -> tconn =  new \mysqli( $dbhost, $dbuser, $dbpassword );
+		$this -> tconn -> query( 'CREATE DATABASE IF NOT EXISTS '. appconfig['dbname'] );
 
 		$this -> conn = new \mysqli( $dbhost, $dbuser, $dbpassword, $dbname );
 
 		if ( $this -> conn -> connect_errno ){
-		    die( "Connection failed: \n".$this -> conn -> connect_error );
+		    die( "Connection failed: \n {$this -> conn -> connect_error}" );
 		}
+
+		$prefix = appconfig['dbprefix'] ?? '';
+		$table = $prefix.$table;
+
+		$collumns = [];
+		$query = $this -> query(
+			"SELECT COLUMN_NAME
+			FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE()
+			AND TABLE_NAME = '{$table}'
+			ORDER BY ORDINAL_POSITION"
+		);
+
+		while( $collumn = $this -> assoc( $query ) ){
+			$collumns[] =  $collumn['COLUMN_NAME'];
+		}
+
+		$this -> table = $table;
+		$this -> collumns = $collumns;
+		$this -> blacklist = is_null( $blacklist ) ? $collumns : $blacklist;
 	}
 
 	/**
-	 * Destructor method - Closes database connection when there are no more instances of this class
+	 * Destructor method - Closes database connection when there are no more instances of this class object
 	 * @return bool
 	 */
 	function __destruct()
@@ -97,9 +127,9 @@ class SANDAL
 	 * @param array $result Database query result
 	 * @return array
 	 */
-	public function fetch( $result )
+	public function assoc( $result )
 	{
-		return mysqli_fetch_assoc( $result );
+		return $result -> fetch_assoc();
 	}
 
 	/**
@@ -109,57 +139,71 @@ class SANDAL
 	 */
 	public function rows( $query )
 	{
-		return ( $query -> num_rows > 0 ) ? true : false;
+		return ( $query -> num_rows > 0 );
 	}
 
 	/**
 	 * Method to create new record
 	 * Don't use it directly, use insert() instead
-	 * @param string $table Database table in which to insert record, without the prefix, if any
 	 * @param array $collumns List of database collumns to fill
 	 * @param array $values List of values to insert into table
 	 * @return bool
 	 */
-	public function create( $table, $collumns, $values )
+	public function create( $values, $collumns = null )
 	{
+		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
 		$collumns = implode(", ", $collumns);
+
 		array_walk( $values, [$this, "clean"] );
 		$nuvals = [];
 		foreach ($values as $value) {
-			$nuvals[] = "'".$value."'";
+			$nuvals[] = "'{$value}'";
 		}
 		$values = implode(", ", $nuvals);
 
-		$sql = "INSERT INTO ".$this -> prefix.$table." ( $collumns ) VALUES ( $values )";
+		$sql = "INSERT INTO {$this -> table} ( {$collumns} ) VALUES ( {$values} )";
 
 		return $this -> query( $sql );
+	}
+
+	public function inserted()
+	{
+		return $this -> conn -> insert_id;
+	}
+
+	public function affected( $result = null )
+	{
+		return $result -> num_rows;
 	}
 
 	/**
 	 * Method to select records with given conditions - strict
 	 * Don't use it directly, use find() instead and pass 'read' as the third argument(callable)
-	 * @param string $table Database table in which to search for records, without the prefix, if any
 	 * @param array $conditions Constraints to apply to action, e.g ['title' => 'Sandal']
+	 * @param array $collumns List of database collumns to select
 	 * @return bool
 	 */
-	public function read( $table, $collumns = ["*"], $conditions = null )
+	public function read( $conditions = null, $collumns = null )
 	{
-		$collumns = implode(", ", $collumns);
+		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
+		$collumns = implode( ", ", $collumns );
+
 		if ( !is_null( $conditions ) ) {
 			array_walk( $conditions, [$this, "clean"] );
 			$nuconds = [];
-			foreach ($conditions as $key => $value) {
-				$nuconds[] = "$key = '".$value."'";
+			foreach ( $conditions as $key => $value ) {
+				$nuconds[] = "{$key} = '{$value}'";
 			}
-			$conditions = implode("AND ", $nuconds);
-			$sql = "SELECT $collumns FROM ".$this -> prefix.$table." WHERE $conditions";
+			$conditions = implode( "AND ", $nuconds );
+			$sql = "SELECT {$collumns} FROM {$this -> table} WHERE {$conditions}";
 		} else {
-			$sql = "SELECT $collumns FROM ".$this -> prefix.$table;
+			$sql = "SELECT {$collumns} FROM {$this -> table}";
 		}
+
 		$query = $this -> query( $sql );
 
 		if ( $query && $this -> rows( $query ) ) {
-			while ( $result = $this -> fetch ( $query ) ) {
+			while ( $result = $this -> assoc( $query ) ) {
 				$results[] = $result;
 			}
 		} else {
@@ -172,30 +216,31 @@ class SANDAL
 	/**
 	 * Method to search for records with given conditions - Uses regular expressions, not strict
 	 * Don't use it directly, use find() instead and pass 'search' as the third argument(callable)
-	 * @param string $table Database table in which to search for records, without the prefix, if any
 	 * @param array $conditions Constraints to apply to action, e.g ['title' => 'Sandal']
+	 * @param array $collumns List of database collumns to select
 	 * @return bool
 	 */
-	public function search( $table, $collumns = null, $conditions = null )
+	public function search( $conditions = null, $collumns = null )
 	{
-		$collumns = is_null( $collumns ) ? ['*'] : $collumns;
+		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
 		$collumns = implode( ", ", $collumns );
 
 		if ( !is_null( $conditions ) ) {
 			array_walk( $conditions, [$this, "clean"] );
 			$nuconds = [];
 			foreach ( $conditions as $key => $value ) {
-				$nuconds[] = "$key LIKE '%".$value."%'";
+				$nuconds[] = "{$key} LIKE '%{$value}%'";
 			}
 			$conditions = implode( "OR ", $nuconds );
-			$sql = "SELECT $collumns FROM ".$this -> prefix.$table." WHERE $conditions";
+			$sql = "SELECT {$collumns} FROM {$this -> table} WHERE {$conditions}";
 		} else {
-			$sql = "SELECT $collumns FROM ".$this -> prefix.$table;
+			$sql = "SELECT {$collumns} FROM {$this -> table}";
 		}
+
 		$query = $this -> query( $sql );
 
 		if ( $query && $this -> rows( $query ) ) {
-			while ( $result = $this -> fetch ( $query ) ) {
+			while ( $result = $this -> assoc( $query ) ) {
 				$results[] = $result;
 			}
 		} else {
@@ -213,61 +258,60 @@ class SANDAL
 	 */
 	public function reset( $result, $row = 0 )
 	{
-    	return mysqli_data_seek( $result, $row );
+		return $result -> data_seek( $row );
   	}
 
 	/**
 	 * Method to update existing record
 	 * Don't use it directly, use insert() instead
-	 * @param string $table Database table in which to update record, without the prefix, if any
-	 * @param array $collumns List of database collumns to update
-	 * @param arry $values List of values to insert into table row
 	 * @param array $conditions Constraints to apply to action, e.g ['title' => 'Sandal']
+	 * @param arry $values List of values to insert into table row
+	 * @param array $collumns List of database collumns to update
 	 * @return bool
 	 */
-	public function update( $table, $collumns, $values, $conditions )
+	public function update( $conditions, $values, $collumns = null )
 	{
+		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
 		$collumns = implode(", ", $collumns);
 
 		array_walk( $values, [$this, "clean"] );
 		$nuvals = [];
 		$colvals = array_combine( $collumns, $values);
 		foreach ( $colvals as $collumn => $value ) {
-			$nuvals[] = "$collumn = '".$value."'";
+			$nuvals[] = "{$collumn} = '{$value}'";
 		}
 		$values = implode(", ", $nuvals);
 
 		array_walk( $conditions, [$this, "clean"] );
 		$nuconds = [];
 		foreach ($conditions as $key => $value) {
-			$nuconds[] = "$key = '".$value."'";
+			$nuconds[] = "{$key} = '{$value}'";
 		}
 		$conditions = implode("AND ", $nuconds);
 
-		$sql = "UPDATE ".$this -> prefix.$table." SET $values WHERE $conditions";
+		$sql = "UPDATE {$this -> table} SET {$values} WHERE {$conditions}";
 		return $this -> query( $sql );
 	}
 
 	/**
 	 * Method to delete a record with given conditions
-	 * @param $table Database table in which to delete record, without the prefix, if any
 	 * @param array $conditions Constraints to apply to action, e.g ['id' => 2] OR ['status' => 'spam']
 	 * @return bool
 	 */
-	public function delete( $table, $conditions = null )
+	public function remove( $conditions = null )
 	{
 		if ( !is_null( $conditions )) {
 			array_walk( $conditions, [$this, "clean"] );
 
 			$nuconds = [];
 			foreach ($conditions as $key => $value) {
-				$nuconds[] = "$key = '".$value."'";
+				$nuconds[] = "$key = '{$value}'";
 			}
 			$conditions = implode("AND ", $nuconds);
 
-			$sql = "DELETE FROM ".$this -> prefix.$table." WHERE $conditions";
+			$sql = "DELETE FROM ".$this -> table." WHERE {$conditions}";
 		} else {
-			$sql = "DELETE FROM ".$this -> prefix.$table;
+			$sql = "DELETE FROM ".$this -> table;
 		}
 
 		return $this -> query( $sql );
@@ -288,13 +332,9 @@ class SANDAL
 			return strcmp( $a[key], $b[key] );
 		});
 
-		sort( $results );
-
-		if ( $order !== "ASC" ) {
-			rsort( $results );
+		if( $order == "DESC" ){
+			array_reverse( $results );
 		}
-
-		return $results;
 	}
 
 	/**
@@ -307,44 +347,23 @@ class SANDAL
 	{
 		return array_slice( $results, $offset );
 	}
-}
-
-/**
-* Data Access Object
-*/
-class Slipper extends SANDAL
-{
-	public $collumns;
-	public $whitelist;
-	public $table;
-	
-	function __construct( $table, $collumns, $whitelist = null )
-	{
-		$this -> table = $table;
-		$this -> collumns = $collumns;
-		$this -> whitelist = is_null( $whitelist ) ? $collumns : $whitelist;
-
-		parent::__construct();
-	}
 
 	/**
 	 * Method for creating or updating a record
-	 * @param array $collums Database collumns for whose values to insert
+	 * @param array $collumns Database collumns for whose values to insert
 	 * @param array $conditions Constraints to apply to action
 	 * @return bool
 	 */
 	public function insert( $values, $collumns = null, $conditions = null )
 	{
-		if ( !is_null( $collumns ) ) {
-			$this -> collumns = $collumns;	
-		}
+		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
 
 		if ( is_null( $conditions ) ) {
-			if ( !$this -> create( $this -> table, $this -> collumns, $values ) ) {
+			if ( !$this -> create( $values, $collumns ) ) {
 				return;
 			}
 		} else {
-			if ( !$this -> update( $this -> table, $this -> collumns, $values, $conditions ) ) {
+			if ( !$this -> update( $conditions, $values, $collumns ) ) {
 				return;
 			}
 		}
@@ -352,36 +371,36 @@ class Slipper extends SANDAL
 
 	/**
 	 * Method for selecting records with given constraints
-	 * @param array $collums Database collumns to select
 	 * @param array $conditions Constraints to apply to selection
+	 * @param array $collumns Database collumns to select
 	 * @param callable $callable Callback method - either read(strict) or search(flexible)
 	 * @return array
 	 */
-	public function find( $collumns = null, $conditions = null, $callable = "read" )
+	public function fetch( $conditions = null, $collumns = null, $callable = "read" )
 	{
-		if ( is_null( $collumns ) ) {
-			$collumns = $this -> collumns;
-		}
-
-		return $this -> $callable( $this -> table, $collumns, $conditions );
+		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
+		return $this -> $callable( $conditions, $collumns );
 	}
 
 	/**
 	 * Method for selecting a single records with given constraints
 	 * Conditions must be on primary keys/unique fields e.g [ 'id' => 1 ]
-	 * @param array $collums Database collumns to select
 	 * @param array $conditions Constraints to apply to selection
+	 * @param array $collumns Database collumns to select
 	 */
 	public function single( $conditions, $collumns = null )
 	{
-		if ( is_null( $collumns ) ) {
-			$collumns = $this -> collumns;
-		}
+		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
 
-		$results = $this -> read( $this -> table, $collumns, $conditions );
+		$results = $this -> read( $conditions, $collumns );
 
 		foreach ( $results[0] as $property => $value ) {
 			$this -> $property = $value;
 		}
+	}
+
+	public function delete( $conditions = null )
+	{
+		return $this -> remove( $this -> table, $conditions );
 	}
 }
