@@ -1,12 +1,12 @@
 <?php
-namespace PatiPati\MySQL;
+namespace Data\Bases\MySQL;
 
 /**
  * @package SANDALs - Simple And Nifty Data Abstraction Layers
- * @subpackage MySQLi Data Access Layer
+ * @subpackage MySQLI Data Access Layer
  * @version 18.01
  * @author Mauko < hi@mauko.co.ke >
- * @link https://phpsandals.co.ke/dals/mysqli
+ * @link https://sandals.github.io/mysqli.html
  */
 class SANDAL
 {
@@ -34,18 +34,19 @@ class SANDAL
 	 */
 	public function __construct( $table, $blacklist = null )
 	{
-		if ( !defined( 'appconfig' ) ){
-			die( 'Please define appconfig( Server Variables )');
+		if ( !defined( 'dbconfig' ) ){
+			print( 'Please define dbconfig( Server Variables )');
+			exit();
 		}
 
-		$dbname = appconfig['dbname'];
-		$dbuser = appconfig['dbuser'] ?? 'root'; 
-		$dbpassword = appconfig['dbpassword'] ?? '';
-		$dbhost = appconfig['dbhost'] ?? 'localhost';
-		$dbport = appconfig['dbport'] ?? $_SERVER['SERVER_PORT'];
+		$dbname = dbconfig['dbname'];
+		$dbuser = dbconfig['dbuser'] ?? 'root'; 
+		$dbpassword = dbconfig['dbpassword'] ?? '';
+		$dbhost = dbconfig['dbhost'] ?? 'localhost';
+		$dbport = dbconfig['dbport'] ?? $_SERVER['SERVER_PORT'];
 
 		$this -> tconn =  new \mysqli( $dbhost, $dbuser, $dbpassword );
-		$this -> tconn -> query( 'CREATE DATABASE IF NOT EXISTS '. appconfig['dbname'] );
+		$this -> tconn -> query( 'CREATE DATABASE IF NOT EXISTS '. dbconfig['dbname'] );
 
 		$this -> conn = new \mysqli( $dbhost, $dbuser, $dbpassword, $dbname );
 
@@ -53,7 +54,7 @@ class SANDAL
 		    die( "Connection failed: \n {$this -> conn -> connect_error}" );
 		}
 
-		$prefix = appconfig['dbprefix'] ?? '';
+		$prefix = dbconfig['dbprefix'] ?? '';
 		$table = $prefix.$table;
 
 		$collumns = [];
@@ -207,7 +208,7 @@ class SANDAL
 				$results[] = $result;
 			}
 		} else {
-			$results = ["error" => "Record Not Found"];
+			$results[] = ["error" => "No Record Found"];
 		}
 
 		return $results;
@@ -229,7 +230,7 @@ class SANDAL
 			array_walk( $conditions, [$this, "clean"] );
 			$nuconds = [];
 			foreach ( $conditions as $key => $value ) {
-				$nuconds[] = "{$key} LIKE '%{$value}%'";
+				$nuconds[] = "$key LIKE '%{$value}%'";
 			}
 			$conditions = implode( "OR ", $nuconds );
 			$sql = "SELECT {$collumns} FROM {$this -> table} WHERE {$conditions}";
@@ -244,7 +245,7 @@ class SANDAL
 				$results[] = $result;
 			}
 		} else {
-			$results = ["error" => "Record Not Found"];
+			$results = ["error" => "No Record Found"];
 		}
 
 		return $results;
@@ -269,10 +270,9 @@ class SANDAL
 	 * @param array $collumns List of database collumns to update
 	 * @return bool
 	 */
-	public function update( $conditions, $values, $collumns = null )
+	public function update( $conditions, $values, $collumns )
 	{
 		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
-		$collumns = implode(", ", $collumns);
 
 		array_walk( $values, [$this, "clean"] );
 		$nuvals = [];
@@ -364,9 +364,11 @@ class SANDAL
 			}
 		} else {
 			if ( !$this -> update( $conditions, $values, $collumns ) ) {
-				return;
+				return false;
 			}
 		}
+
+		return true;
 	}
 
 	/**
@@ -392,11 +394,13 @@ class SANDAL
 	{
 		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
 
-		$results = $this -> read( $conditions, $collumns );
+		$result = $this -> read( $conditions, $collumns )[0];
 
-		foreach ( $results[0] as $property => $value ) {
+		foreach ( $result as $property => $value ) {
 			$this -> $property = $value;
 		}
+
+		return $result;
 	}
 
 	public function delete( $conditions = null )
