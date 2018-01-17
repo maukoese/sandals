@@ -16,7 +16,7 @@ class SANDAL
 	// Temporary database connection object
 	private $tconn;
 
-	// Database connection object
+	// Main database connection object
 	private $conn;
 
 	// Database table name
@@ -31,6 +31,9 @@ class SANDAL
 	/**
 	 * Constuctor method sets basic server connection parameters, as well as database table name prefixes
 	 * As an added bonus, we can create a database if it does not exist.
+	 * @param $table Database table to connect to for queries
+	 * @param $blacklist Array of database table collumns to ignore
+	 * @todo Consider passing $config as an argument to the constructor
 	 */
 	public function __construct( $table, $blacklist = null )
 	{
@@ -39,6 +42,28 @@ class SANDAL
 			exit();
 		}
 
+		// //to-do: pass as an argument in constructor
+		// $config = dbconfig;
+
+		// if ( is_array( $config ) ) {
+		// 	$dbname = $config['name'];
+		// 	$dbuser = $config['user'] ?? 'root';
+		// 	$dbpassword = $config['password'] ?? '';
+		// 	$dbhost = $config['host'] ?? 'localhost';
+		// 	$dbport = $config['port'] ?? $_SERVER['SERVER_PORT'];
+
+		// 	$dbprefix = $config['prefix'] ?? '';
+		// } else {
+		// 	$dbname = $config;
+		// 	$dbuser = 'root';
+		// 	$dbpassword = '';
+		// 	$dbhost = 'localhost';
+		// 	$dbport = $_SERVER['SERVER_PORT'];
+
+		// 	$dbprefix = '';
+		// }
+
+
 		$dbname = dbconfig['dbname'];
 		$dbuser = dbconfig['dbuser'] ?? 'root'; 
 		$dbpassword = dbconfig['dbpassword'] ?? '';
@@ -46,7 +71,8 @@ class SANDAL
 		$dbport = dbconfig['dbport'] ?? $_SERVER['SERVER_PORT'];
 
 		$this -> tconn =  new \mysqli( $dbhost, $dbuser, $dbpassword );
-		$this -> tconn -> query( 'CREATE DATABASE IF NOT EXISTS '. dbconfig['dbname'] );
+		$this -> tconn -> query( "CREATE DATABASE IF NOT EXISTS {$dbname}" );
+		$this -> tconn -> close();
 
 		$this -> conn = new \mysqli( $dbhost, $dbuser, $dbpassword, $dbname );
 
@@ -55,14 +81,14 @@ class SANDAL
 		}
 
 		$prefix = dbconfig['dbprefix'] ?? '';
-		$table = $prefix.$table;
+		$this -> table = $prefix.$table;
 
 		$collumns = [];
 		$query = $this -> query(
 			"SELECT COLUMN_NAME
 			FROM information_schema.COLUMNS
 			WHERE TABLE_SCHEMA = DATABASE()
-			AND TABLE_NAME = '{$table}'
+			AND TABLE_NAME = '{$this -> table}'
 			ORDER BY ORDINAL_POSITION"
 		);
 
@@ -70,13 +96,12 @@ class SANDAL
 			$collumns[] =  $collumn['COLUMN_NAME'];
 		}
 
-		$this -> table = $table;
 		$this -> collumns = $collumns;
 		$this -> blacklist = is_null( $blacklist ) ? $collumns : $blacklist;
 	}
 
 	/**
-	 * Destructor method - Closes database connection when there are no more instances of this class object
+	 * Destructor method - Closes database connection when there are no more instances of the SANDAL object
 	 * @return bool
 	 */
 	function __destruct()
@@ -124,7 +149,7 @@ class SANDAL
 	}
 
 	/**
-	 * Method to convert database query result as an associative array
+	 * Method to convert database query result into an associative array
 	 * @param array $result Database query result
 	 * @return array
 	 */
@@ -144,23 +169,35 @@ class SANDAL
 	}
 
 	/**
+	 * Method to check if database query has no result items(rows)
+	 * @param object $query Database query
+	 * @return bool
+	 */
+	public function blank( $query )
+	{
+		return ( $query -> num_rows < 1 );
+	}
+
+	/**
 	 * Method to create new record
 	 * Don't use it directly, use insert() instead
-	 * @param array $collumns List of database collumns to fill
+	 * @param array $collumns List of database collumns to fill - defaults to all table collumns
 	 * @param array $values List of values to insert into table
 	 * @return bool
 	 */
 	public function create( $values, $collumns = null )
 	{
 		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
-		$collumns = implode(", ", $collumns);
+		$collumns = implode( ", ", $collumns );
 
-		array_walk( $values, [$this, "clean"] );
 		$nuvals = [];
-		foreach ($values as $value) {
+		$values = array_map( function( $val ){
+			return $this -> clean( $val );
+		}, $values );
+		foreach ( $values as $value ) {
 			$nuvals[] = "'{$value}'";
 		}
-		$values = implode(", ", $nuvals);
+		$values = implode( ", ", $nuvals );
 
 		$sql = "INSERT INTO {$this -> table} ( {$collumns} ) VALUES ( {$values} )";
 
@@ -172,6 +209,12 @@ class SANDAL
 		return $this -> conn -> insert_id;
 	}
 
+	/**
+	 * Find number of rows affected by a query
+	 * @param $result Database query result
+	 * @return int
+	 * @todo mysqli_num_rows??
+	 */
 	public function affected( $result = null )
 	{
 		return $result -> num_rows;
@@ -179,9 +222,9 @@ class SANDAL
 
 	/**
 	 * Method to select records with given conditions - strict
-	 * Don't use it directly, use find() instead and pass 'read' as the third argument(callable)
+	 * Direct use discouraged, use find() instead and pass 'read' as the third argument as a callable
 	 * @param array $conditions Constraints to apply to action, e.g ['title' => 'Sandal']
-	 * @param array $collumns List of database collumns to select
+	 * @param array $collumns List of database collumns to select - defaults to all table collumns
 	 * @return bool
 	 */
 	public function read( $conditions = null, $collumns = null )
@@ -190,7 +233,9 @@ class SANDAL
 		$collumns = implode( ", ", $collumns );
 
 		if ( !is_null( $conditions ) ) {
-			array_walk( $conditions, [$this, "clean"] );
+			$conditions = array_map( function( $cond ){
+				return $this -> clean( $cond );
+			}, $conditions );
 			$nuconds = [];
 			foreach ( $conditions as $key => $value ) {
 				$nuconds[] = "{$key} = '{$value}'";
@@ -216,9 +261,9 @@ class SANDAL
 
 	/**
 	 * Method to search for records with given conditions - Uses regular expressions, not strict
-	 * Don't use it directly, use find() instead and pass 'search' as the third argument(callable)
+	 * Direct use discouraged, use find() instead and pass 'search' as the third argument as a callable
 	 * @param array $conditions Constraints to apply to action, e.g ['title' => 'Sandal']
-	 * @param array $collumns List of database collumns to select
+	 * @param array $collumns List of database collumns to select - defaults to all table collumns
 	 * @return bool
 	 */
 	public function search( $conditions = null, $collumns = null )
@@ -227,7 +272,9 @@ class SANDAL
 		$collumns = implode( ", ", $collumns );
 
 		if ( !is_null( $conditions ) ) {
-			array_walk( $conditions, [$this, "clean"] );
+			$conditions = array_map( function( $cond ){
+				return $this -> clean( $cond );
+			}, $conditions );
 			$nuconds = [];
 			foreach ( $conditions as $key => $value ) {
 				$nuconds[] = "$key LIKE '%{$value}%'";
@@ -253,7 +300,7 @@ class SANDAL
 
 	/**
 	 * Method to reset array index
-	 * @param array $result The database query to reset
+	 * @param array $result The database query result to reset
 	 * @param int $row Index to reset to
 	 * @return bool/mixed
 	 */
@@ -267,53 +314,33 @@ class SANDAL
 	 * Don't use it directly, use insert() instead
 	 * @param array $conditions Constraints to apply to action, e.g ['title' => 'Sandal']
 	 * @param arry $values List of values to insert into table row
-	 * @param array $collumns List of database collumns to update
+	 * @param array $collumns List of database collumns to update - defaults to all table collumns
 	 * @return bool
 	 */
 	public function update( $conditions, $values, $collumns )
 	{
 		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
 
-		array_walk( $values, [$this, "clean"] );
+		$values = array_map( function( $val ){
+			return $this -> clean( $val);
+		}, $values );
 		$nuvals = [];
-		$colvals = array_combine( $collumns, $values);
+		$colvals = array_combine( $collumns, $values );
 		foreach ( $colvals as $collumn => $value ) {
 			$nuvals[] = "{$collumn} = '{$value}'";
 		}
 		$values = implode(", ", $nuvals);
 
-		array_walk( $conditions, [$this, "clean"] );
+		$conditions = array_map( function( $cond ){
+				return $this -> clean( $cond );
+			}, $conditions );
 		$nuconds = [];
-		foreach ($conditions as $key => $value) {
+		foreach ( $conditions as $key => $value ) {
 			$nuconds[] = "{$key} = '{$value}'";
 		}
 		$conditions = implode("AND ", $nuconds);
 
 		$sql = "UPDATE {$this -> table} SET {$values} WHERE {$conditions}";
-		return $this -> query( $sql );
-	}
-
-	/**
-	 * Method to delete a record with given conditions
-	 * @param array $conditions Constraints to apply to action, e.g ['id' => 2] OR ['status' => 'spam']
-	 * @return bool
-	 */
-	public function remove( $conditions = null )
-	{
-		if ( !is_null( $conditions )) {
-			array_walk( $conditions, [$this, "clean"] );
-
-			$nuconds = [];
-			foreach ($conditions as $key => $value) {
-				$nuconds[] = "$key = '{$value}'";
-			}
-			$conditions = implode("AND ", $nuconds);
-
-			$sql = "DELETE FROM ".$this -> table." WHERE {$conditions}";
-		} else {
-			$sql = "DELETE FROM ".$this -> table;
-		}
-
 		return $this -> query( $sql );
 	}
 
@@ -350,7 +377,7 @@ class SANDAL
 
 	/**
 	 * Method for creating or updating a record
-	 * @param array $collumns Database collumns for whose values to insert
+	 * @param array $collumns Database table collumns for whose values to insert - defaults to all table collumns
 	 * @param array $conditions Constraints to apply to action
 	 * @return bool
 	 */
@@ -374,7 +401,7 @@ class SANDAL
 	/**
 	 * Method for selecting records with given constraints
 	 * @param array $conditions Constraints to apply to selection
-	 * @param array $collumns Database collumns to select
+	 * @param array $collumns Database table collumns to select - defaults to all table collumns
 	 * @param callable $callable Callback method - either read(strict) or search(flexible)
 	 * @return array
 	 */
@@ -388,7 +415,7 @@ class SANDAL
 	 * Method for selecting a single records with given constraints
 	 * Conditions must be on primary keys/unique fields e.g [ 'id' => 1 ]
 	 * @param array $conditions Constraints to apply to selection
-	 * @param array $collumns Database collumns to select
+	 * @param array $collumns Database collumns to select - defaults to all table collumns
 	 */
 	public function single( $conditions, $collumns = null )
 	{
@@ -403,8 +430,29 @@ class SANDAL
 		return $result;
 	}
 
+	/**
+	 * Deletes records from table with given constraints
+	 * @param array $conditions Constraints to apply to query, e.g [ 'id' => 4 ] or [ 'status' => 'draft' ]
+	 * @return bool/mixed
+	 */
 	public function delete( $conditions = null )
 	{
-		return $this -> remove( $this -> table, $conditions );
+		if ( !is_null( $conditions ) ) {
+			$conditions = array_map( function( $cond ){
+				return $this -> clean( $cond );
+			}, $conditions );
+
+			$nuconds = [];
+			foreach ( $conditions as $key => $value ) {
+				$nuconds[] = "$key = '{$value}'";
+			}
+			$conditions = implode("AND ", $nuconds);
+
+			$sql = "DELETE FROM ".$this -> table." WHERE {$conditions}";
+		} else {
+			$sql = "DELETE FROM ".$this -> table;
+		}
+
+		return $this -> query( $sql );
 	}
 }
