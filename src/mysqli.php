@@ -1,5 +1,5 @@
 <?php
-namespace Data\Bases\MySQL;
+namespace PatiPati\MySQL;
 
 /**
  * @package SANDALs - Simple And Nifty Data Abstraction Layers
@@ -31,44 +31,29 @@ class SANDAL
 	/**
 	 * Constuctor method sets basic server connection parameters, as well as database table name prefixes
 	 * As an added bonus, we can create a database if it does not exist.
-	 * @param $table Database table to connect to for queries
-	 * @param $blacklist Array of database table collumns to ignore
+	 * @param string $table Database table to connect to for queries
+	 * @param array $blacklist Array of database table collumns to ignore
 	 * @todo Consider passing $config as an argument to the constructor
 	 */
-	public function __construct( $table, $blacklist = null )
+	public function __construct( $config, $table, $blacklist = null )
 	{
-		if ( !defined( 'dbconfig' ) ){
-			print( 'Please define dbconfig( Server Variables )');
-			exit();
+		if ( is_array( $config ) ) {
+			$dbname = $config['dbname'];
+			$dbuser = $config['dbuser'] ?? 'root';
+			$dbpassword = $config['dbpass'] ?? '';
+			$dbhost = $config['dbhost'] ?? 'localhost';
+			$dbport = $config['dbport'] ?? $_SERVER['SERVER_PORT'];
+
+			$prefix = $config['dbprefix'] ?? '';
+		} else {
+			$dbname = $config;
+			$dbuser = 'root';
+			$dbpassword = '';
+			$dbhost = 'localhost';
+			$dbport = $_SERVER['SERVER_PORT'];
+
+			$prefix = '';
 		}
-
-		// //to-do: pass as an argument in constructor
-		// $config = dbconfig;
-
-		// if ( is_array( $config ) ) {
-		// 	$dbname = $config['name'];
-		// 	$dbuser = $config['user'] ?? 'root';
-		// 	$dbpassword = $config['password'] ?? '';
-		// 	$dbhost = $config['host'] ?? 'localhost';
-		// 	$dbport = $config['port'] ?? $_SERVER['SERVER_PORT'];
-
-		// 	$dbprefix = $config['prefix'] ?? '';
-		// } else {
-		// 	$dbname = $config;
-		// 	$dbuser = 'root';
-		// 	$dbpassword = '';
-		// 	$dbhost = 'localhost';
-		// 	$dbport = $_SERVER['SERVER_PORT'];
-
-		// 	$dbprefix = '';
-		// }
-
-
-		$dbname = dbconfig['dbname'];
-		$dbuser = dbconfig['dbuser'] ?? 'root'; 
-		$dbpassword = dbconfig['dbpassword'] ?? '';
-		$dbhost = dbconfig['dbhost'] ?? 'localhost';
-		$dbport = dbconfig['dbport'] ?? $_SERVER['SERVER_PORT'];
 
 		$this -> tconn =  new \mysqli( $dbhost, $dbuser, $dbpassword );
 		$this -> tconn -> query( "CREATE DATABASE IF NOT EXISTS {$dbname}" );
@@ -97,11 +82,11 @@ class SANDAL
 		}
 
 		$this -> collumns = $collumns;
-		$this -> blacklist = is_null( $blacklist ) ? $collumns : $blacklist;
+		$this -> blacklist = is_null( $blacklist ) ? [] : $blacklist;
 	}
 
 	/**
-	 * Destructor method - Closes database connection when there are no more instances of the SANDAL object
+	 * Destructor method - Closes database connection w/hen there are no more instances of the SANDAL object
 	 * @return bool
 	 */
 	function __destruct()
@@ -252,11 +237,10 @@ class SANDAL
 			while ( $result = $this -> assoc( $query ) ) {
 				$results[] = $result;
 			}
+			return $results;
 		} else {
-			$results[] = ["error" => "No Record Found"];
+			return ['error' => 'No Record Found' ];
 		}
-
-		return $results;
 	}
 
 	/**
@@ -277,7 +261,7 @@ class SANDAL
 			}, $conditions );
 			$nuconds = [];
 			foreach ( $conditions as $key => $value ) {
-				$nuconds[] = "$key LIKE '%{$value}%'";
+				$nuconds[] = "{$key} LIKE '%{$value}%'";
 			}
 			$conditions = implode( "OR ", $nuconds );
 			$sql = "SELECT {$collumns} FROM {$this -> table} WHERE {$conditions}";
@@ -291,11 +275,10 @@ class SANDAL
 			while ( $result = $this -> assoc( $query ) ) {
 				$results[] = $result;
 			}
+			return $results;
 		} else {
-			$results = ["error" => "No Record Found"];
+			return ['error' => 'No Record Found' ];
 		}
-
-		return $results;
 	}
 
 	/**
@@ -345,26 +328,6 @@ class SANDAL
 	}
 
 	/**
-	 * Method to order/sort $results array by a given key's value
-	 * @param array $results Database query results to sort
-	 * @param string $key The key whose value to order by
-	 * @param string $order Way to order array, either Ascending(ASC) of Descending(DESC)
-	 * @return array
-	 */
-	public function order( $results, $key, $order = "ASC" )
-	{
-		define( 'key', $key );
-		usort( $results, function ( $a, $b )
-		{
-			return strcmp( $a[key], $b[key] );
-		});
-
-		if( $order == "DESC" ){
-			array_reverse( $results );
-		}
-	}
-
-	/**
 	 * Method to offset array by given number
 	 * @param array $results Database query results to offset
 	 * @param int $offset Number of records to skip
@@ -405,10 +368,22 @@ class SANDAL
 	 * @param callable $callable Callback method - either read(strict) or search(flexible)
 	 * @return array
 	 */
-	public function fetch( $conditions = null, $collumns = null, $callable = "read" )
+	public function fetch( $conditions = null, $collumns = null, $callable = "read", $limit = 10, $key = "created", $order = "ASC" )
 	{
 		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
-		return $this -> $callable( $conditions, $collumns );
+		$results = array_slice( $this -> $callable( $conditions, $collumns ), 0, $limit );
+		
+		// usort( $results, function ( $a, $b ) use ( $key )
+		// {
+		// 	return strcmp( $a[$key], $b[$key] );
+		// });
+
+		// if( $order == "DESC" ){
+		// 	array_reverse( $results );
+		// }
+
+		return $results;
+
 	}
 
 	/**
@@ -421,13 +396,17 @@ class SANDAL
 	{
 		$collumns = is_null( $collumns ) ? $this -> collumns : $collumns;
 
-		$result = $this -> read( $conditions, $collumns )[0];
+		$result = $this -> read( $conditions, $collumns );
 
-		foreach ( $result as $property => $value ) {
-			$this -> $property = $value;
+		if( !isset( $result['error'] ) ){
+			foreach ( $result as $property => $value ) {
+				$this -> $property = $value;
+			}
+
+			return $result[0];
+		} else {
+			return [ 'error' => $result['error'] ];
 		}
-
-		return $result;
 	}
 
 	/**
